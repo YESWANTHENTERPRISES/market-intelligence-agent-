@@ -1,0 +1,45 @@
+{
+  "manifest_version": 3,
+  "name": "AI Market Intelligence Terminal",
+  "version": "1.0.0",
+  "description": "Compact TradingView-Style Market Intelligence Side Terminal",
+  "permissions": [
+    "activeTab",
+    "storage"
+  ],
+  "host_permissions": [
+    "*://*.tradingview.com/*",
+    "*://tradingview.com/*",
+    "http://localhost:8000/*",
+    "ws://localhost:8000/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "*://*.tradingview.com/*",
+        "*://tradingview.com/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "css": [
+        "content.css"
+      ],
+      "run_at": "document_end"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "*"
+      ],
+      "matches": [
+        "*://*.tradingview.com/*",
+        "*://tradingview.com/*"
+      ]
+    }
+  ]
+}
