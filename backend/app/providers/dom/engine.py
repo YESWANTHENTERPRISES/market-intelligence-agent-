@@ -1,5 +1,6 @@
 import time
 import asyncio
+import logging
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
 from app.providers.dom.models import (
@@ -19,6 +20,8 @@ from app.providers.dom.normalizer import (
     score_relative_depth,
 )
 
+logger = logging.getLogger("dom_engine")
+
 DEFAULT_SOURCE_WEIGHTS = {
     "COMEX": 0.35,
     "OANDA": 0.35,
@@ -33,6 +36,41 @@ class DOMEngine:
             DukascopyAdapter(),
         ]
 
+    def _score_with_proximity(
+        self,
+        buckets: Dict[str, float],
+        current_price: float,
+        step: float,
+        proximity_weight: float = 0.3
+    ) -> Optional[str]:
+        if not buckets:
+            return None
+        best_key = None
+        best_combined = -1.0
+
+        for key, raw_score in buckets.items():
+            try:
+                parts = key.split("–")
+                low = float(parts[0])
+                high = float(parts[1])
+                mid = (low + high) / 2.0
+
+                dist_steps = abs(mid - current_price) / (step if step > 0 else 1.0)
+                proximity_bonus = max(0.0, 1.0 - (dist_steps * 0.1))
+
+                combined = (
+                    raw_score * (1.0 - proximity_weight)
+                    + (proximity_bonus * 100.0) * proximity_weight
+                )
+
+                if combined > best_combined:
+                    best_combined = combined
+                    best_key = key
+            except (ValueError, TypeError, ZeroDivisionError, IndexError):
+                continue
+
+        return best_key
+
     async def build_dom_intelligence(self, symbol: str = "XAUUSD", current_price: float = 4431.00) -> DOMIntelligenceData:
         now = time.time()
         
@@ -42,7 +80,11 @@ class DOMEngine:
             try:
                 snap = await adapter.fetch_snapshot(symbol, current_price=current_price)
                 snapshots.append(snap)
-            except Exception:
+            except Exception as e:
+                logger.warning(
+                    f"[DOM] {adapter.source_name} adapter failed: "
+                    f"{type(e).__name__}: {e}"
+                )
                 snapshots.append(
                     SourceSnapshot(
                         source_id=adapter.source_id,
@@ -86,8 +128,14 @@ class DOMEngine:
 
         total_sources = len(self.adapters)
         active_count = len(active_snapshots)
-        coverage_str = f"MULTI-SOURCE ({active_count}/{total_sources})" if active_count > 1 else (
-            f"SINGLE-SOURCE ({active_count}/{total_sources})" if active_count == 1 else "UNAVAILABLE"
+        coverage_str = (
+            f"MULTI-SOURCE ({active_count}/{total_sources})"
+            if active_count > 1
+            else (
+                f"SINGLE-SOURCE ({active_count}/{total_sources})"
+                if active_count == 1
+                else f"NO-SOURCE (0/{total_sources})"
+            )
         )
 
         # 3. Calculate Spot/Futures Basis & Coordinate Normalization
@@ -96,7 +144,22 @@ class DOMEngine:
 
         futures_mid = comex_snap.raw_futures_price if comex_snap else None
         futures_ts = comex_snap.observed_timestamp if comex_snap else now
-        spot_mid = float(current_price) if (current_price and current_price > 0) else (spot_snap.raw_spot_price if spot_snap else 4431.00)
+
+        spot_mid = float(current_price) if (current_price is not None and current_price > 0) else None
+        if spot_mid is None and spot_snap is not None and spot_snap.raw_spot_price is not None:
+            try:
+                candidate_spot = float(spot_snap.raw_spot_price)
+                if candidate_spot > 0:
+                    spot_mid = candidate_spot
+            except (TypeError, ValueError):
+                spot_mid = None
+
+        if spot_mid is None or spot_mid <= 0:
+            spot_mid = 4431.00
+            logger.warning(
+                f"[DOM] No valid spot price for {symbol}, using benchmark {spot_mid}"
+            )
+
         spot_ts = spot_snap.observed_timestamp if spot_snap else now
 
         if futures_mid and spot_mid:
@@ -133,50 +196,91 @@ class DOMEngine:
         for snap in active_snapshots:
             w = weights.get(snap.source_id, 0.0)
             
-            # Asks
+            # Asks (Supply above or around spot mid)
             scored_asks = score_relative_depth(snap.asks)
             for lvl in scored_asks:
                 norm_price = normalize_futures_price(lvl.price, basis_value if snap.source_id == "COMEX" else None)
+                if norm_price is None:
+                    continue
+                # Validate ask semantics: ask price should be >= spot_mid - 2.5 * step
+                if norm_price < (p - 2.5 * step):
+                    logger.warning(f"[DOM] Filtering inverted ask level {norm_price} for {snap.source_id} (spot_mid={p})")
+                    continue
                 low_b = round(norm_price / step) * step
                 bucket_key = f"{fmt.format(low_b)}–{fmt.format(low_b + step)}"
                 ask_buckets[bucket_key] = ask_buckets.get(bucket_key, 0.0) + (lvl.relative_score or 0.0) * w
 
-            # Bids
+            # Bids (Demand below or around spot mid)
             scored_bids = score_relative_depth(snap.bids)
             for lvl in scored_bids:
                 norm_price = normalize_futures_price(lvl.price, basis_value if snap.source_id == "COMEX" else None)
+                if norm_price is None:
+                    continue
+                # Validate bid semantics: bid price should be <= spot_mid + 2.5 * step
+                if norm_price > (p + 2.5 * step):
+                    logger.warning(f"[DOM] Filtering inverted bid level {norm_price} for {snap.source_id} (spot_mid={p})")
+                    continue
                 low_b = round(norm_price / step) * step
-                bucket_key = f"{fmt.format(low_b - step)}–{fmt.format(low_b)}"
+                bucket_key = f"{fmt.format(low_b)}–{fmt.format(low_b + step)}"
                 bid_buckets[bucket_key] = bid_buckets.get(bucket_key, 0.0) + (lvl.relative_score or 0.0) * w
 
         # Build LiquidityZone objects
         liquidity_zones: List[LiquidityZone] = []
 
         if ask_buckets:
-            top_ask_range = max(ask_buckets, key=ask_buckets.get)
+            top_ask_range = self._score_with_proximity(ask_buckets, p, step) or max(ask_buckets, key=ask_buckets.get)
             top_ask_score = ask_buckets[top_ask_range]
             ask_impact = "HIGH" if top_ask_score > 40 else ("MODERATE" if top_ask_score > 20 else "LOW")
             liquidity_zones.append(
-                LiquidityZone(price_range=top_ask_range, side="ASK LIQUIDITY", impact=ask_impact, score=round(top_ask_score, 1))
+                LiquidityZone(
+                    price_range=top_ask_range,
+                    side="ASK LIQUIDITY",
+                    impact=ask_impact,
+                    score=round(top_ask_score, 1),
+                    observed=True,
+                    source="MULTI-SOURCE" if active_count > 1 else "SINGLE-SOURCE"
+                )
             )
         else:
             liquidity_zones.append(
-                LiquidityZone(price_range=default_ask_range, side="ASK LIQUIDITY", impact="HIGH", score=65.0)
+                LiquidityZone(
+                    price_range=default_ask_range,
+                    side="ASK LIQUIDITY",
+                    impact="HIGH",
+                    score=65.0,
+                    observed=False,
+                    source="FALLBACK"
+                )
             )
 
         if bid_buckets:
-            top_bid_range = max(bid_buckets, key=bid_buckets.get)
+            top_bid_range = self._score_with_proximity(bid_buckets, p, step) or max(bid_buckets, key=bid_buckets.get)
             top_bid_score = bid_buckets[top_bid_range]
             bid_impact = "HIGH" if top_bid_score > 40 else ("MODERATE" if top_bid_score > 20 else "LOW")
             liquidity_zones.append(
-                LiquidityZone(price_range=top_bid_range, side="BID LIQUIDITY", impact=bid_impact, score=round(top_bid_score, 1))
+                LiquidityZone(
+                    price_range=top_bid_range,
+                    side="BID LIQUIDITY",
+                    impact=bid_impact,
+                    score=round(top_bid_score, 1),
+                    observed=True,
+                    source="MULTI-SOURCE" if active_count > 1 else "SINGLE-SOURCE"
+                )
             )
         else:
             liquidity_zones.append(
-                LiquidityZone(price_range=default_bid_range, side="BID LIQUIDITY", impact="HIGH", score=55.0)
+                LiquidityZone(
+                    price_range=default_bid_range,
+                    side="BID LIQUIDITY",
+                    impact="HIGH",
+                    score=55.0,
+                    observed=False,
+                    source="FALLBACK"
+                )
             )
 
         liquidity_status = "VERIFIED" if active_count > 0 else "DATA NOT VERIFIED"
+
 
         # 6. Aggregated Retail Positioning
         retail_longs = [s.retail_long_pct for s in active_snapshots if s.retail_long_pct is not None]
@@ -184,7 +288,7 @@ class DOMEngine:
             avg_long = sum(retail_longs) / len(retail_longs)
             retail_pos = "LONG" if avg_long >= 55.0 else ("SHORT" if avg_long <= 45.0 else "NEUTRAL")
         else:
-            retail_pos = "LONG"
+            retail_pos = "UNAVAILABLE"
 
         # 7. Futures Sell Wall (COMEX Ask Depth)
         futures_sell_wall = "HIGH"
@@ -198,11 +302,19 @@ class DOMEngine:
             futures_liquidity = "UNAVAILABLE"
 
         # 8. Divergence Calculation (OTC Retail Long vs Futures Sell Wall)
-        divergence = "HIGH" if (retail_pos == "LONG" and futures_sell_wall == "HIGH") else (
-            "MODERATE" if (retail_pos != "NEUTRAL" and futures_sell_wall != "LOW") else "LOW"
+        divergence = (
+            "UNAVAILABLE"
+            if retail_pos == "UNAVAILABLE" or active_count == 0
+            else (
+                "HIGH"
+                if retail_pos == "LONG" and futures_sell_wall == "HIGH"
+                else (
+                    "MODERATE"
+                    if retail_pos != "NEUTRAL" and futures_sell_wall != "LOW"
+                    else "LOW"
+                )
+            )
         )
-        if active_count == 0:
-            divergence = "UNAVAILABLE"
 
         # 9. Data Quality Scoring
         data_quality = "MODERATE"
@@ -232,3 +344,4 @@ class DOMEngine:
         )
 
 dom_engine = DOMEngine()
+

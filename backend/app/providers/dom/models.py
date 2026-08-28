@@ -36,6 +36,9 @@ class LiquidityZone(BaseModel):
     side: str  # "ASK LIQUIDITY" | "BID LIQUIDITY"
     impact: str  # "HIGH" | "MODERATE" | "LOW"
     score: float = 0.0
+    observed: bool = True
+    source: str = "OBSERVED"
+
 
 class SourceDetail(BaseModel):
     name: str

@@ -5,19 +5,43 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
 from app.providers.manager import provider_manager
+from app.replay.api import router as replay_router
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("market_intelligence_backend")
 
 app = FastAPI(title=settings.APP_NAME)
+app.include_router(replay_router)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "chrome-extension://*",
+        "http://localhost:3000",
+        "http://localhost:5173",
+        "http://127.0.0.1:8000",
+        "https://www.tradingview.com",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    await provider_manager.client.aclose()
+    logger.info("httpx client closed cleanly.")
+
+@app.get("/")
+async def root():
+    return {
+        "status": "ok",
+        "app": settings.APP_NAME,
+        "docs": "/docs",
+        "health": "/health",
+        "intelligence": "/api/intelligence?symbol=XAUUSD",
+        "websocket": "/ws"
+    }
 
 @app.get("/health")
 async def health():
@@ -52,36 +76,49 @@ async def websocket_endpoint(websocket: WebSocket):
 
         while True:
             try:
-                data_text = await asyncio.wait_for(websocket.receive_text(), timeout=3.0)
                 try:
-                    msg = json.loads(data_text)
-                    action = msg.get("action")
-                    if action in ["SUBSCRIBE", "TICK", "PRICE_UPDATE"]:
-                        new_sym = msg.get("symbol")
-                        new_tf = msg.get("timeframe", current_timeframe)
-                        p_val = msg.get("price")
-                        p_float = float(p_val) if p_val and float(p_val) > 0 else None
-                        
-                        if new_sym:
-                            current_symbol = new_sym.upper()
-                            current_timeframe = new_tf
-                            logger.info(f"WebSocket updated: symbol={current_symbol}, tf={current_timeframe}, price={p_float}")
-                        
-                        intel = await provider_manager.get_market_intelligence(current_symbol, current_timeframe, override_price=p_float)
-                        await websocket.send_json(intel.model_dump(by_alias=True))
-                except (json.JSONDecodeError, ValueError):
-                    pass
+                    data_text = await asyncio.wait_for(websocket.receive_text(), timeout=3.0)
+                    try:
+                        msg = json.loads(data_text)
+                        action = msg.get("action")
+                        if action in ["SUBSCRIBE", "TICK", "PRICE_UPDATE"]:
+                            new_sym = msg.get("symbol")
+                            new_tf = msg.get("timeframe", current_timeframe)
+                            p_val = msg.get("price")
+                            try:
+                                p_float = float(p_val) if p_val else None
+                                if p_float is not None and p_float <= 0:
+                                    p_float = None
+                            except (ValueError, TypeError):
+                                p_float = None
 
-            except asyncio.TimeoutError:
-                # Periodic push for current_symbol (remembers subscribed symbol!)
-                intel = await provider_manager.get_market_intelligence(current_symbol, current_timeframe)
-                await websocket.send_json(intel.model_dump(by_alias=True))
+                            if new_sym:
+                                current_symbol = new_sym.upper()
+                                current_timeframe = new_tf
+                                logger.info(f"WS updated: symbol={current_symbol}, tf={current_timeframe}, price={p_float}")
+
+                            intel = await provider_manager.get_market_intelligence(current_symbol, current_timeframe, override_price=p_float)
+                            await websocket.send_json(intel.model_dump(by_alias=True))
+                    except (json.JSONDecodeError, ValueError) as e:
+                        logger.warning(f"Bad WS message from client: {e}")
+
+                except asyncio.TimeoutError:
+                    # Periodic push for current_symbol (remembers subscribed symbol!)
+                    intel = await provider_manager.get_market_intelligence(current_symbol, current_timeframe)
+                    await websocket.send_json(intel.model_dump(by_alias=True))
+
+            except (WebSocketDisconnect, RuntimeError, Exception) as loop_err:
+                logger.info(f"WebSocket connection closed ({loop_err}) for {current_symbol}")
+                break
 
     except WebSocketDisconnect:
-        logger.info(f"WebSocket disconnected for symbol={current_symbol}")
+        logger.info(f"WebSocket disconnected: symbol={current_symbol}")
     except Exception as e:
-        logger.error(f"WebSocket error: {e}")
+        logger.error(f"WebSocket error: {e}", exc_info=True)
+    finally:
+        logger.info(f"WebSocket cleanup complete for {current_symbol}")
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("app.main:app", host=settings.HOST, port=settings.PORT, reload=True)
+    uvicorn.run("app.main:app", host=settings.HOST, port=settings.PORT, reload=settings.DEBUG)
+

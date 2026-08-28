@@ -68,7 +68,7 @@ export default function IntelligencePanel() {
   const newsRef = useRef(null);
 
   useEffect(() => {
-    // Listen for WebSocket updates relayed from background.js
+    // Listen for WebSocket updates relayed from background.js (Extension mode)
     if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.onMessage) {
       const listener = (msg) => {
         if (msg.type === "INTELLIGENCE_UPDATE") {
@@ -81,8 +81,43 @@ export default function IntelligencePanel() {
       };
       chrome.runtime.onMessage.addListener(listener);
       return () => chrome.runtime.onMessage.removeListener(listener);
+    } else {
+      // Standalone web preview mode: direct WebSocket & HTTP
+      let ws;
+      let active = true;
+
+      const fetchIntel = async () => {
+        try {
+          const res = await fetch(`http://127.0.0.1:8000/api/intelligence?symbol=${encodeURIComponent(symbol)}`);
+          if (res.ok && active) {
+            const data = await res.json();
+            setIntelData(data);
+            setLoading(false);
+          }
+        } catch (err) {}
+      };
+
+      fetchIntel();
+
+      try {
+        ws = new WebSocket(`ws://127.0.0.1:8000/ws?symbol=${encodeURIComponent(symbol)}`);
+        ws.onmessage = (event) => {
+          try {
+            const data = JSON.parse(event.data);
+            if (active) {
+              setIntelData(data);
+              setLoading(false);
+            }
+          } catch (e) {}
+        };
+      } catch (e) {}
+
+      return () => {
+        active = false;
+        if (ws) ws.close();
+      };
     }
-  }, []);
+  }, [symbol]);
 
   // Handle symbol switch event dispatched from TradingView DOM chart detection
   useEffect(() => {

@@ -17,7 +17,7 @@ DEFAULT_WEIGHTS = {
 
 class ScoringEngine:
     def __init__(self):
-        self.default_weights = DEFAULT_WEIGHTS
+        self.default_weights = dict(DEFAULT_WEIGHTS)
 
     def calculate_redistributed_weights(self, active_components: Dict[str, bool]) -> Tuple[Dict[str, float], float]:
         """
@@ -25,14 +25,14 @@ class ScoringEngine:
         """
         active_weight_sum = sum(
             weight for key, weight in self.default_weights.items()
-            if active_components.get(key, True)
+            if active_components.get(key, False)
         )
         
         if active_weight_sum <= 0:
             return {k: 0.0 for k in self.default_weights}, 0.0
 
         redistributed = {
-            key: (weight / active_weight_sum) if active_components.get(key, True) else 0.0
+            key: (weight / active_weight_sum) if active_components.get(key, False) else 0.0
             for key, weight in self.default_weights.items()
         }
         
@@ -93,10 +93,6 @@ class ScoringEngine:
         self,
         directional_pressure: DirectionalPressure
     ) -> Tuple[str, int]:
-        """
-        Derives Overall Bias (BUY/SELL/NEUTRAL) and Overall Confidence %.
-        """
-        # Weights across timeframes (higher weight for higher timeframes)
         tf_weights = {
             "4H": 0.30,
             "1H": 0.25,
@@ -104,7 +100,6 @@ class ScoringEngine:
             "15M": 0.15,
             "5M": 0.10,
         }
-        
         scores = {
             "4H": directional_pressure.tf_4h,
             "1H": directional_pressure.tf_1h,
@@ -113,16 +108,28 @@ class ScoringEngine:
             "5M": directional_pressure.tf_5m,
         }
 
+        # Weight each TF by temporal importance × confidence of its data
+        effective_weights = {
+            tf: tf_weights[tf] * scores[tf].confidence
+            for tf in tf_weights
+        }
+        total_effective = sum(effective_weights.values())
+
+        if total_effective == 0:
+            return "NEUTRAL", 50
+
         weighted_buyer_total = sum(
-            scores[tf].buyers * weight for tf, weight in tf_weights.items()
+            scores[tf].buyers * (effective_weights[tf] / total_effective)
+            for tf in tf_weights
         )
-        
+
         buyer_pct = int(round(weighted_buyer_total))
         seller_pct = 100 - buyer_pct
 
-        if buyer_pct > seller_pct:
+        # 55% threshold — avoids calling 51/49 a strong BUY signal
+        if buyer_pct >= 55:
             return "BUY", buyer_pct
-        elif seller_pct > buyer_pct:
+        elif seller_pct >= 55:
             return "SELL", seller_pct
         else:
             return "NEUTRAL", 50

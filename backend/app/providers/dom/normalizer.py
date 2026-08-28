@@ -58,14 +58,16 @@ def calculate_basis(
     formatted = f"{sign}${abs(raw_basis):.2f}"
     return raw_basis, formatted
 
-def normalize_futures_price(futures_price: float, basis: Optional[float]) -> float:
+def normalize_futures_price(futures_price: float, basis: Optional[float]) -> Optional[float]:
     """
     normalized_level = comex_level - basis
     All Important Levels must exist on the XAUUSD spot price axis.
+    Returns None if basis is unavailable to prevent un-normalized futures prices from masquerading as spot coordinates.
     """
     if basis is None:
-        return futures_price
-    return futures_price - basis
+        return None
+    return round(futures_price - basis, 4)
+
 
 def score_relative_depth(levels: List[PriceLevel]) -> List[PriceLevel]:
     """

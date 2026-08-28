@@ -197,7 +197,124 @@ class MarketStructureEngine:
 
         return displacements
 
+    def detect_fvgs(
+        self,
+        candles: List[Dict[str, Any]],
+        timeframe: str,
+        atr: Optional[float] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Detects 3-candle Fair Value Gaps (FVG) and tracks mitigation status.
+        Bullish FVG: low[i] > high[i-2]
+        Bearish FVG: high[i] < low[i-2]
+        """
+        if len(candles) < 3:
+            return []
+
+        if atr is None or atr <= 0:
+            atr = calculate_atr(candles)
+
+        fvgs = []
+        min_gap = atr * 0.05
+
+        for i in range(2, len(candles)):
+            c0 = candles[i - 2]
+            c2 = candles[i]
+
+            # Bullish FVG (Demand Gap)
+            if c2['low'] > c0['high'] + min_gap:
+                gap_low = float(c0['high'])
+                gap_high = float(c2['low'])
+                midpoint = round((gap_low + gap_high) / 2.0, 4)
+
+                subsequent = candles[i + 1:] if i + 1 < len(candles) else []
+                mitigated = any(c['low'] <= gap_low for c in subsequent)
+                partially_filled = any(c['low'] < gap_high for c in subsequent)
+
+                status = "MITIGATED" if mitigated else ("PARTIAL" if partially_filled else "ACTIVE")
+
+                if status != "MITIGATED":
+                    fvgs.append({
+                        "price": midpoint,
+                        "gap_low": gap_low,
+                        "gap_high": gap_high,
+                        "type": "BULLISH_FVG",
+                        "classification": "SUPPORT",
+                        "timeframe": timeframe,
+                        "status": status,
+                        "evidence": [f"Bullish FVG ({gap_low:.2f}–{gap_high:.2f}) on {timeframe}"]
+                    })
+
+            # Bearish FVG (Supply Gap)
+            if c2['high'] < c0['low'] - min_gap:
+                gap_high = float(c0['low'])
+                gap_low = float(c2['high'])
+                midpoint = round((gap_low + gap_high) / 2.0, 4)
+
+                subsequent = candles[i + 1:] if i + 1 < len(candles) else []
+                mitigated = any(c['high'] >= gap_high for c in subsequent)
+                partially_filled = any(c['high'] > gap_low for c in subsequent)
+
+                status = "MITIGATED" if mitigated else ("PARTIAL" if partially_filled else "ACTIVE")
+
+                if status != "MITIGATED":
+                    fvgs.append({
+                        "price": midpoint,
+                        "gap_low": gap_low,
+                        "gap_high": gap_high,
+                        "type": "BEARISH_FVG",
+                        "classification": "RESISTANCE",
+                        "timeframe": timeframe,
+                        "status": status,
+                        "evidence": [f"Bearish FVG ({gap_low:.2f}–{gap_high:.2f}) on {timeframe}"]
+                    })
+
+        return fvgs
+
+    def detect_bos_choch(
+        self,
+        candles: List[Dict[str, Any]],
+        timeframe: str,
+        atr: Optional[float] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Detects Break of Structure (BOS) and Change of Character (CHoCH).
+        """
+        if len(candles) < 6:
+            return []
+
+        swings = self.detect_swings(candles, timeframe, atr=atr)
+        if len(swings) < 2:
+            return []
+
+        results = []
+        for i in range(1, len(swings)):
+            s_prev = swings[i - 1]
+            s_curr = swings[i]
+
+            if s_curr["type"] == "SWING_HIGH" and s_prev["type"] == "SWING_HIGH":
+                if s_curr["price"] > s_prev["price"]:
+                    results.append({
+                        "price": s_curr["price"],
+                        "type": "BULLISH_BOS",
+                        "classification": "RESISTANCE",
+                        "timeframe": timeframe,
+                        "evidence": [f"Bullish BOS ({s_curr['price']}) on {timeframe}"]
+                    })
+            elif s_curr["type"] == "SWING_LOW" and s_prev["type"] == "SWING_LOW":
+                if s_curr["price"] < s_prev["price"]:
+                    results.append({
+                        "price": s_curr["price"],
+                        "type": "BEARISH_BOS",
+                        "classification": "SUPPORT",
+                        "timeframe": timeframe,
+                        "evidence": [f"Bearish BOS ({s_curr['price']}) on {timeframe}"]
+                    })
+
+        return results
+
     def detect_rejections(
+
         self,
         candles: List[Dict[str, Any]],
         timeframe: str,

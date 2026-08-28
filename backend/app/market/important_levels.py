@@ -1,10 +1,13 @@
 import time
+import logging
 from typing import Dict, List, Any, Optional, Tuple
 from app.market.structure import market_structure_engine, calculate_atr
 from app.market.price_areas import price_area_clusterer
 from app.liquidity.radar import liquidity_radar
 from app.providers.dom.engine import dom_engine
 from app.providers.dom.aggregator import dom_aggregator
+
+logger = logging.getLogger("important_levels")
 
 TIMEFRAME_WEIGHTS = {
     "1W": 1.00,
@@ -53,8 +56,14 @@ class ImportantLevelsEngine:
             }
 
         # Build mock candles if ohlc_data is missing to allow deterministic market calculation
+        using_synthetic_fallback = False
         if not ohlc_data:
+            logger.warning(
+                f"[{symbol}] No live OHLC data provided — using synthetic fallback candles. "
+                f"Level detection accuracy is REDUCED. Feed live OHLC data for production use."
+            )
             ohlc_data = self._generate_fallback_ohlc(symbol, current_price)
+            using_synthetic_fallback = True
 
         primary_candles = ohlc_data.get("1H") or ohlc_data.get("5M") or []
         atr = calculate_atr(primary_candles) if primary_candles else max(1.0, current_price * 0.002)
@@ -121,6 +130,36 @@ class ImportantLevelsEngine:
                     "evidence": rej["evidence"]
                 })
 
+            # FVGs (Fair Value Gaps)
+            fvgs = market_structure_engine.detect_fvgs(candles, tf, atr=tf_atr)
+            for fvg in fvgs:
+                raw_candidates.append({
+                    "price": fvg["price"],
+                    "source": f"{tf}_FVG",
+                    "timeframe": tf,
+                    "type": fvg["type"],
+                    "classification": fvg["classification"],
+                    "strength": 0.85,
+                    "timestamp": "N/A",
+                    "status": fvg.get("status", "ACTIVE"),
+                    "evidence": fvg["evidence"]
+                })
+
+            # BOS & CHoCH (Structure Breaks)
+            bos_list = market_structure_engine.detect_bos_choch(candles, tf, atr=tf_atr)
+            for bos in bos_list:
+                raw_candidates.append({
+                    "price": bos["price"],
+                    "source": f"{tf}_BOS",
+                    "timeframe": tf,
+                    "type": bos["type"],
+                    "classification": bos["classification"],
+                    "strength": 0.85,
+                    "timestamp": "N/A",
+                    "evidence": bos["evidence"]
+                })
+
+
         # Reference Period Levels (PDH, PDL, PWH, PWL, PSH, PSL)
         period_levels = market_structure_engine.compute_session_and_period_levels(ohlc_data)
         for pl in period_levels:
@@ -164,7 +203,8 @@ class ImportantLevelsEngine:
             }
 
         # Step 2: CLUSTER raw level candidates into ATR-relative price zones
-        dec_places = 4 if current_price < 5.0 else (2 if current_price < 1000.0 else 0)
+        dec_places = 4 if current_price < 5.0 else (2 if current_price < 10000.0 else 1)
+
         zones = price_area_clusterer.cluster_candidates(
             raw_candidates=raw_candidates,
             current_price=current_price,
@@ -197,8 +237,15 @@ class ImportantLevelsEngine:
             dist = abs(mid - current_price)
             dist_atr = round(dist / max(0.0001, atr), 2)
 
-            # Classification & Importance
+            # Classification & Actionability
             importance = self._classify_importance(score)
+
+            if dist_atr <= 1.0:
+                actionability = "IMMEDIATE"
+            elif dist_atr <= 2.5:
+                actionability = "NEAR"
+            else:
+                actionability = "DISTANT"
 
             # Liquidity data payload (evaluated case-insensitively)
             ev_str = " ".join([str(e).lower() for e in zone["evidence"]])
@@ -212,32 +259,36 @@ class ImportantLevelsEngine:
                 liq_type = "BUY_SIDE" if mid >= current_price else "SELL_SIDE"
                 liq_strength = "HIGH" if score >= 70 else "MODERATE"
 
-            dom_sources = []
+            active_dom_sources = []
             if dom_intelligence_data and hasattr(dom_intelligence_data, "sources"):
-                dom_sources = [s.name for s in dom_intelligence_data.sources if getattr(s, "included_in_aggregation", False)]
+                active_dom_sources = [s.name for s in dom_intelligence_data.sources if getattr(s, "included_in_aggregation", False)]
 
             level_obj = {
+                "id": f"lvl_{int(mid)}_{int((abs(mid) % 1) * 100):02d}",
                 "zone": zone["zone"],
                 "midpoint": mid,
                 "classification": zone["classification"],
                 "importance": importance,
+                "actionability": actionability,
                 "confluence_score": score,
                 "distance": round(dist, dec_places),
                 "distance_atr": dist_atr,
                 "timeframes": zone["timeframes"],
                 "evidence": zone["evidence"],
+                "score_breakdown": score_breakdown,
                 "liquidity": {
                     "type": liq_type,
                     "strength": liq_strength
                 },
                 "dom": {
                     "confluence": "HIGH" if (dom_intelligence_data and getattr(dom_intelligence_data, "divergence", "") == "HIGH") else "MODERATE",
-                    "sources": dom_sources
+                    "sources": active_dom_sources
                 },
-                "status": zone["status"],
-                "score_breakdown": score_breakdown
+                "observed": not using_synthetic_fallback,
+                "status": zone.get("status", "ACTIVE")
             }
             evaluated_levels.append(level_obj)
+
 
         # Step 4: FILTER (Only display VERY HIGH, HIGH, MODERATE — filter out LOW < 50)
         displayable_levels = [lvl for lvl in evaluated_levels if lvl["importance"] in ["VERY_HIGH", "HIGH", "MODERATE"]]
@@ -245,8 +296,19 @@ class ImportantLevelsEngine:
         # Step 5: RANK & SELECT top Support, Resistance, and Liquidity zones
         displayable_levels.sort(key=lambda x: (x["confluence_score"], -x["distance_atr"]), reverse=True)
 
-        support_levels = [lvl for lvl in displayable_levels if lvl["classification"] in ["SUPPORT", "BROKEN_RESISTANCE"] or lvl["midpoint"] < current_price]
-        resistance_levels = [lvl for lvl in displayable_levels if lvl["classification"] in ["RESISTANCE", "BROKEN_SUPPORT"] or lvl["midpoint"] >= current_price]
+        support_levels = [
+            lvl for lvl in displayable_levels
+            if lvl["classification"] in ["SUPPORT", "BROKEN_RESISTANCE"]
+            or (lvl["classification"] not in ["RESISTANCE", "BROKEN_SUPPORT"] and lvl["midpoint"] < current_price)
+        ]
+        resistance_levels = [
+            lvl for lvl in displayable_levels
+            if lvl["classification"] in ["RESISTANCE", "BROKEN_SUPPORT"]
+            or (lvl["classification"] not in ["SUPPORT", "BROKEN_RESISTANCE"] and lvl["midpoint"] >= current_price)
+        ]
+        # Prevent a level appearing in both lists
+        support_ids = {id(l) for l in support_levels}
+        resistance_levels = [l for l in resistance_levels if id(l) not in support_ids]
         liquidity_levels = [lvl for lvl in displayable_levels if lvl["liquidity"]["type"] in ["BUY_SIDE", "SELL_SIDE"]]
 
         top_support = support_levels[:self.max_support_count]
@@ -254,13 +316,24 @@ class ImportantLevelsEngine:
         top_liquidity = liquidity_levels[:self.max_liquidity_count]
 
         # Extract source details for data quality report
-        active_count = len(dom_sources) if 'dom_sources' in locals() and dom_sources else 3
+        active_dom_sources = []
+        if dom_intelligence_data and hasattr(dom_intelligence_data, "sources"):
+            active_dom_sources = [
+                s.name for s in dom_intelligence_data.sources
+                if getattr(s, "included_in_aggregation", False)
+            ]
+
+        active_count = len(active_dom_sources) if active_dom_sources else 0
+        source_names = ", ".join(active_dom_sources) if active_dom_sources else "No sources active"
+
         data_quality_report = {
             "level": getattr(dom_intelligence_data, "data_quality", "MODERATE") if dom_intelligence_data else "MODERATE",
             "active_sources": active_count,
             "total_sources": 4,
-            "reason": f"{', '.join(dom_sources) if 'dom_sources' in locals() and dom_sources else 'COMEX, OANDA, Dukascopy'} available"
+            "reason": f"{source_names} available"
         }
+        if using_synthetic_fallback:
+            data_quality_report["data_source"] = "SYNTHETIC_FALLBACK"
 
         return {
             "status": "AVAILABLE",
@@ -394,7 +467,8 @@ class ImportantLevelsEngine:
         Generates realistic fallback candles scaled to the validated market price p.
         Used when live OHLC candle feeds are initializing.
         """
-        dec = 4 if p < 5.0 else (2 if p < 1000.0 else 0)
+        dec = 4 if p < 5.0 else (2 if p < 10000.0 else 1)
+
         step = max(0.002, p * 0.002)
 
         data = {}
