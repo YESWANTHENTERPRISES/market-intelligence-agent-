@@ -1,5 +1,5 @@
 import time
-from typing import Dict, List, Any, Optional, Tuple
+from typing import Dict, List, Any
 
 class PriceAreaClusterer:
     def __init__(self, atr_multiplier: float = 0.15):
@@ -147,32 +147,31 @@ class PriceAreaClusterer:
         Support breakdown -> WEAKENING -> BROKEN
         If BROKEN_SUPPORT receives confirmed retest defense -> transition to RESISTANCE.
         """
-        midpoint = zone["midpoint"]
-        classification = zone["classification"]
+        classification = zone.get("classification", "")
         status = zone.get("status", "ACTIVE")
 
         # Decisive break threshold
         break_threshold = atr * 0.50
 
-        if classification == "RESISTANCE":
+        if classification == "RESISTANCE" and status == "ACTIVE":
             if current_price > (zone["zone_high"] + break_threshold):
                 zone["status"] = "BROKEN"
                 zone["classification"] = "BROKEN_RESISTANCE"
                 zone["evidence"].append("Decisive upside breakout confirmed")
 
-        elif classification == "SUPPORT":
+        elif classification == "SUPPORT" and status == "ACTIVE":
             if current_price < (zone["zone_low"] - break_threshold):
                 zone["status"] = "BROKEN"
                 zone["classification"] = "BROKEN_SUPPORT"
                 zone["evidence"].append("Decisive downside breakdown confirmed")
 
-        elif classification == "BROKEN_RESISTANCE" and confirmed_retest:
+        elif classification == "BROKEN_RESISTANCE" and status == "BROKEN" and confirmed_retest:
             if current_price >= zone["zone_low"]:
                 zone["classification"] = "SUPPORT"
                 zone["status"] = "ACTIVE"
                 zone["evidence"].append("Broken resistance confirmed converted to Support")
 
-        elif classification == "BROKEN_SUPPORT" and confirmed_retest:
+        elif classification == "BROKEN_SUPPORT" and status == "BROKEN" and confirmed_retest:
             if current_price <= zone["zone_high"]:
                 zone["classification"] = "RESISTANCE"
                 zone["status"] = "ACTIVE"

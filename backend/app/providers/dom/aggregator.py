@@ -1,4 +1,4 @@
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any
 from app.providers.dom.models import SourceSnapshot, LiquidityZone
 
 class DOMAggregator:

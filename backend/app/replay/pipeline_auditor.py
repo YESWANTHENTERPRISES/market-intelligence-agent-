@@ -1,6 +1,5 @@
-import math
 import numpy as np
-from typing import List, Dict, Any, Optional
+from typing import List, Dict
 from app.replay.models import (
     ScenarioEvent,
     TradePlanEvent,

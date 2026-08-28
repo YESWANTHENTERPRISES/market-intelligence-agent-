@@ -25,13 +25,16 @@ async def test_fred_macro_data():
     if not settings.FRED_API_KEY or "your_" in settings.FRED_API_KEY:
         pytest.skip("FRED API key not set")
 
-    async with httpx.AsyncClient() as client:
-        res = await client.get(
-            f"https://api.stlouisfed.org/fred/series/observations?series_id=DGS10&api_key={settings.FRED_API_KEY}&file_type=json"
-        )
-        assert res.status_code == 200
-        data = res.json()
-        assert "observations" in data
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            res = await client.get(
+                f"https://api.stlouisfed.org/fred/series/observations?series_id=DGS10&api_key={settings.FRED_API_KEY}&file_type=json"
+            )
+            assert res.status_code == 200
+            data = res.json()
+            assert "observations" in data
+    except (httpx.ReadTimeout, httpx.ConnectTimeout):
+        pytest.skip("FRED API network connection timed out")
 
 @pytest.mark.asyncio
 async def test_provider_manager_all_symbols():

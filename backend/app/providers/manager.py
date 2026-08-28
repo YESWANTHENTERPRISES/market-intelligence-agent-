@@ -1,4 +1,3 @@
-import asyncio
 import logging
 import time
 from datetime import datetime, timezone
@@ -6,7 +5,7 @@ import httpx
 from typing import Dict, Any, Optional, List
 from app.core.config import settings
 from app.models.schemas import (
-    MarketIntelligenceResponse, DirectionalPressure, TimeframePressure,
+    MarketIntelligenceResponse, DirectionalPressure,
     Fundamentals, NewsItem, SessionInfo, Correlations, CorrelationItem,
     LargeActivity, OrderFlow, DOMIntelligence, CurrencyItem, COTData,
     FedProbabilities, MarketRegime, SeasonalityData, LiquidityPools,
@@ -47,19 +46,36 @@ def compute_dynamic_levels(symbol: str, price: float, bias: str = "BUY") -> Dict
     sym = symbol.upper()
 
     # Step sizing & formatting decimal precision based on asset class
-    if p < 5.0:  # Major Forex (e.g. EURUSD ~1.0850, GBPUSD ~1.2650)
-        dec = 4
-        fmt = "{:.4f}"
-        step = max(0.0020, p * 0.0020)
-    elif p < 250.0:  # JPY pairs (e.g. USDJPY ~155.50)
+    # Classify primarily by `sym`, fallback to price magnitude heuristic
+    if any(k in sym for k in ["JPY", "USDJPY", "EURJPY", "GBPJPY", "AUDJPY", "CADJPY", "CHFJPY", "NZDJPY"]):
         dec = 2
         fmt = "{:.2f}"
         step = max(0.40, p * 0.0030)
-    elif p > 10000.0:  # Crypto (e.g. BTCUSD ~65000)
+    elif any(k in sym for k in ["BTC", "ETH", "SOL", "XRP", "BNB", "DOGE", "ADA", "AVAX", "DOT", "LINK", "CRYPTO"]):
+        dec = 1 if p >= 1000.0 else (2 if p >= 1.0 else 4)
+        fmt = f"{{:.{dec}f}}"
+        step = max(800.0 if p >= 10000.0 else p * 0.010, p * 0.010)
+    elif any(k in sym for k in ["XAU", "GOLD", "XAG", "SILVER", "XPT", "PLATINUM", "XPD", "PALLADIUM", "GC", "SI"]):
+        dec = 2
+        fmt = "{:.2f}"
+        step = max(4.0 if ("XAU" in sym or "GOLD" in sym or "GC" in sym) else 0.20, p * 0.002)
+    elif any(k in sym for k in ["EURUSD", "GBPUSD", "AUDUSD", "NZDUSD", "USDCAD", "USDCHF", "EURGBP", "EURCHF", "AUDNZD", "EURAUD", "GBPAUD"]):
+        dec = 4
+        fmt = "{:.4f}"
+        step = max(0.0020, p * 0.0020)
+    elif p < 5.0:  # Major Forex fallback
+        dec = 4
+        fmt = "{:.4f}"
+        step = max(0.0020, p * 0.0020)
+    elif p < 250.0:  # JPY pairs fallback
+        dec = 2
+        fmt = "{:.2f}"
+        step = max(0.40, p * 0.0030)
+    elif p > 10000.0:  # Crypto fallback
         dec = 1
         fmt = "{:.1f}"
         step = max(800.0, p * 0.010)
-    else:  # Gold / Metals (e.g. XAUUSD ~4400)
+    else:  # Gold / Metals fallback
         dec = 2
         fmt = "{:.2f}"
         step = max(4.0, p * 0.002)

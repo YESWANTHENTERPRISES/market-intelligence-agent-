@@ -16,12 +16,12 @@ app.include_router(replay_router)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "chrome-extension://*",
         "http://localhost:3000",
         "http://localhost:5173",
         "http://127.0.0.1:8000",
         "https://www.tradingview.com",
     ],
+    allow_origin_regex=r"chrome-extension://.*",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -71,8 +71,13 @@ async def websocket_endpoint(websocket: WebSocket):
 
     try:
         # Push initial data for connected symbol
-        intel = await provider_manager.get_market_intelligence(current_symbol, current_timeframe, override_price=initial_price)
-        await websocket.send_json(intel.model_dump(by_alias=True))
+        try:
+            intel = await provider_manager.get_market_intelligence(current_symbol, current_timeframe, override_price=initial_price)
+            await websocket.send_json(intel.model_dump(by_alias=True))
+        except WebSocketDisconnect:
+            raise
+        except Exception as e:
+            logger.error(f"Error fetching initial market intelligence for {current_symbol}: {e}", exc_info=True)
 
         while True:
             try:
@@ -97,19 +102,32 @@ async def websocket_endpoint(websocket: WebSocket):
                                 current_timeframe = new_tf
                                 logger.info(f"WS updated: symbol={current_symbol}, tf={current_timeframe}, price={p_float}")
 
-                            intel = await provider_manager.get_market_intelligence(current_symbol, current_timeframe, override_price=p_float)
-                            await websocket.send_json(intel.model_dump(by_alias=True))
+                            try:
+                                intel = await provider_manager.get_market_intelligence(current_symbol, current_timeframe, override_price=p_float)
+                                await websocket.send_json(intel.model_dump(by_alias=True))
+                            except WebSocketDisconnect:
+                                raise
+                            except Exception as e:
+                                logger.error(f"Error fetching/sending market intelligence on WS update for {current_symbol}: {e}", exc_info=True)
                     except (json.JSONDecodeError, ValueError) as e:
                         logger.warning(f"Bad WS message from client: {e}")
 
                 except asyncio.TimeoutError:
                     # Periodic push for current_symbol (remembers subscribed symbol!)
-                    intel = await provider_manager.get_market_intelligence(current_symbol, current_timeframe)
-                    await websocket.send_json(intel.model_dump(by_alias=True))
+                    try:
+                        intel = await provider_manager.get_market_intelligence(current_symbol, current_timeframe)
+                        await websocket.send_json(intel.model_dump(by_alias=True))
+                    except WebSocketDisconnect:
+                        raise
+                    except Exception as e:
+                        logger.error(f"Error in periodic market intelligence push for {current_symbol}: {e}", exc_info=True)
 
-            except (WebSocketDisconnect, RuntimeError, Exception) as loop_err:
-                logger.info(f"WebSocket connection closed ({loop_err}) for {current_symbol}")
+            except WebSocketDisconnect:
+                logger.info(f"WebSocket disconnected: symbol={current_symbol}")
                 break
+            except Exception as loop_err:
+                logger.error(f"Transient error in WS loop for {current_symbol}: {loop_err}", exc_info=True)
+                await asyncio.sleep(0.5)
 
     except WebSocketDisconnect:
         logger.info(f"WebSocket disconnected: symbol={current_symbol}")

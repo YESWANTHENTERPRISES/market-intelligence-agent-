@@ -1,8 +1,5 @@
 from typing import Dict, Any, Tuple
-from app.models.schemas import (
-    DirectionalPressure, TimeframePressure,
-    MarketIntelligenceResponse
-)
+from app.models.schemas import DirectionalPressure, TimeframePressure
 
 DEFAULT_WEIGHTS = {
     "momentum": 0.20,

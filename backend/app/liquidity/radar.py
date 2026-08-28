@@ -1,4 +1,4 @@
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any
 
 class LiquidityRadar:
     def analyze_liquidity_pools(

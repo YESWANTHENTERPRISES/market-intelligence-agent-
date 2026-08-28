@@ -1,4 +1,4 @@
-from typing import List, Dict, Any, Optional
+from typing import List, Optional
 from app.replay.models import ReplayCandle, TradePlanEvent, TradeOutcome, ReplayConfig
 
 

@@ -2,8 +2,8 @@ import csv
 import json
 import math
 import os
-from datetime import datetime, timedelta, timezone
-from typing import List, Dict, Any, Optional
+from datetime import datetime, timedelta
+from typing import List, Dict, Any
 from app.replay.models import ReplayCandle
 
 

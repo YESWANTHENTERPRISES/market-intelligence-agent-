@@ -1,5 +1,5 @@
 import logging
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict, Any, List, Optional
 from app.models.schemas import (
     TradeScenarioResponse, TradeScenarioDetail, ScenarioTriggerLevel,
     ScenarioLiquidityDetail, MarketContext, ImportantLevels, DOMIntelligence

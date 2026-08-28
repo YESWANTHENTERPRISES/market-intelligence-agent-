@@ -4,6 +4,8 @@ websockets>=11.0
 pydantic>=2.0.0
 pydantic-settings>=2.0.0
 httpx>=0.24.0
+pytz>=2023.3
+# Planned persistence layer (audit history & trade logs)
 sqlalchemy>=2.0.0
 aiosqlite>=0.19.0
 pytest>=7.3.0

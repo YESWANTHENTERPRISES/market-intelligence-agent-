@@ -1,5 +1,5 @@
 from typing import List, Dict, Any
-from app.replay.models import ReplayCandle, ReplayConfig, AblationResult
+from app.replay.models import ReplayConfig, AblationResult
 from app.replay.metrics import metrics_calculator
 
 

@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any
 from pydantic import BaseModel
 
 

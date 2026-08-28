@@ -1,5 +1,4 @@
-import time
-from typing import Dict, List, Any, Optional, Tuple
+from typing import Dict, List, Any, Optional
 
 def calculate_atr(candles: List[Dict[str, float]], period: int = 14) -> float:
     """

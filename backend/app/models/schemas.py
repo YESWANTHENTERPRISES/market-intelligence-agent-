@@ -1,5 +1,5 @@
-from typing import List, Optional, Dict, Any, Union
-from datetime import datetime
+from typing import List, Optional, Dict
+from datetime import datetime, timedelta
 from dataclasses import dataclass
 import pytz
 from pydantic import BaseModel, Field, ConfigDict
@@ -222,6 +222,9 @@ def compute_minutes_until_event(time_gmt_str: str) -> Optional[int]:
             second=0, microsecond=0
         )
         delta_mins = (event_today - now_ist).total_seconds() / 60
+        if delta_mins <= 0:
+            event_tomorrow = event_today + timedelta(days=1)
+            delta_mins = (event_tomorrow - now_ist).total_seconds() / 60
         return int(delta_mins) if delta_mins > 0 else None
     except Exception:
         return None

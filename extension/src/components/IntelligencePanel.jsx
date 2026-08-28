@@ -61,11 +61,20 @@ export default function IntelligencePanel() {
   const [symbol, setSymbol] = useState("XAUUSD");
   const [intelData, setIntelData] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [backendUrl, setBackendUrl] = useState("http://127.0.0.1:8000");
 
   const panelRef = useRef(null);
   const aiViewRef = useRef(null);
   const domRef = useRef(null);
   const newsRef = useRef(null);
+
+  useEffect(() => {
+    if (typeof chrome !== "undefined" && chrome.storage && chrome.storage.local) {
+      chrome.storage.local.get(["backendBaseUrl"], (res) => {
+        if (res.backendBaseUrl) setBackendUrl(res.backendBaseUrl);
+      });
+    }
+  }, []);
 
   useEffect(() => {
     // Listen for WebSocket updates relayed from background.js (Extension mode)
@@ -86,9 +95,15 @@ export default function IntelligencePanel() {
       let ws;
       let active = true;
 
+      const baseHttp = (backendUrl || "http://127.0.0.1:8000").trim().replace(/\/+$/, "");
+      let baseWs = baseHttp;
+      if (baseWs.startsWith("http://")) baseWs = baseWs.replace("http://", "ws://");
+      else if (baseWs.startsWith("https://")) baseWs = baseWs.replace("https://", "wss://");
+      else if (!baseWs.startsWith("ws://") && !baseWs.startsWith("wss://")) baseWs = "ws://" + baseWs;
+
       const fetchIntel = async () => {
         try {
-          const res = await fetch(`http://127.0.0.1:8000/api/intelligence?symbol=${encodeURIComponent(symbol)}`);
+          const res = await fetch(`${baseHttp}/api/intelligence?symbol=${encodeURIComponent(symbol)}`);
           if (res.ok && active) {
             const data = await res.json();
             setIntelData(data);
@@ -100,7 +115,7 @@ export default function IntelligencePanel() {
       fetchIntel();
 
       try {
-        ws = new WebSocket(`ws://127.0.0.1:8000/ws?symbol=${encodeURIComponent(symbol)}`);
+        ws = new WebSocket(`${baseWs}/ws?symbol=${encodeURIComponent(symbol)}`);
         ws.onmessage = (event) => {
           try {
             const data = JSON.parse(event.data);
@@ -117,7 +132,7 @@ export default function IntelligencePanel() {
         if (ws) ws.close();
       };
     }
-  }, [symbol]);
+  }, [symbol, backendUrl]);
 
   // Handle symbol switch event dispatched from TradingView DOM chart detection
   useEffect(() => {
@@ -236,6 +251,33 @@ export default function IntelligencePanel() {
           <div className="data-row">
             <span className="data-label">DOM Source</span>
             <span className="data-value">Broker-specific / Dukascopy</span>
+          </div>
+          <div className="data-row" style={{ flexDirection: "column", alignItems: "flex-start", gap: "4px", padding: "6px 0" }}>
+            <span className="data-label">Backend Base URL</span>
+            <input
+              type="text"
+              value={backendUrl}
+              onChange={(e) => {
+                const newUrl = e.target.value;
+                setBackendUrl(newUrl);
+                if (typeof chrome !== "undefined" && chrome.storage && chrome.storage.local) {
+                  chrome.storage.local.set({ backendBaseUrl: newUrl });
+                }
+                if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.sendMessage) {
+                  chrome.runtime.sendMessage({ type: "SET_BACKEND_URL", url: newUrl });
+                }
+              }}
+              style={{
+                width: "100%",
+                background: "#161b26",
+                border: "1px solid #2d3748",
+                color: "#e2e8f0",
+                fontSize: "10px",
+                padding: "3px 6px",
+                borderRadius: "4px",
+                boxSizing: "border-box"
+              }}
+            />
           </div>
         </div>
       )}

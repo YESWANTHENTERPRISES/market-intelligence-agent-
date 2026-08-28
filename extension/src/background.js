@@ -4,13 +4,41 @@ let socket = null;
 let currentSymbol = "XAUUSD";
 let currentTimeframe = "5M";
 let currentPrice = null;
+let backendBaseUrl = "http://127.0.0.1:8000";
 
-// Restore stored active symbol if available
+function getWsUrl(baseUrl, symbol, price) {
+  let raw = (baseUrl || "http://127.0.0.1:8000").trim().replace(/\/+$/, "");
+  let wsBase = raw;
+  if (wsBase.startsWith("http://")) {
+    wsBase = wsBase.replace("http://", "ws://");
+  } else if (wsBase.startsWith("https://")) {
+    wsBase = wsBase.replace("https://", "wss://");
+  } else if (!wsBase.startsWith("ws://") && !wsBase.startsWith("wss://")) {
+    wsBase = "ws://" + wsBase;
+  }
+  return `${wsBase}/ws?symbol=${encodeURIComponent(symbol)}${price ? `&price=${price}` : ""}`;
+}
+
+// Restore stored active symbol & backendBaseUrl if available
 if (typeof chrome !== "undefined" && chrome.storage && chrome.storage.local) {
-  chrome.storage.local.get(["activeSymbol", "activeTimeframe"], (res) => {
+  chrome.storage.local.get(["activeSymbol", "activeTimeframe", "backendBaseUrl"], (res) => {
     if (res.activeSymbol) currentSymbol = res.activeSymbol;
     if (res.activeTimeframe) currentTimeframe = res.activeTimeframe;
+    if (res.backendBaseUrl) backendBaseUrl = res.backendBaseUrl;
   });
+
+  if (chrome.storage.onChanged) {
+    chrome.storage.onChanged.addListener((changes, area) => {
+      if (area === "local" && changes.backendBaseUrl) {
+        backendBaseUrl = changes.backendBaseUrl.newValue || "http://127.0.0.1:8000";
+        if (socket) {
+          try { socket.close(); } catch (e) {}
+          socket = null;
+        }
+        connectWebSocket();
+      }
+    });
+  }
 }
 
 function connectWebSocket() {
@@ -18,12 +46,23 @@ function connectWebSocket() {
     return;
   }
 
+  if (typeof chrome !== "undefined" && chrome.storage && chrome.storage.local) {
+    chrome.storage.local.get(["backendBaseUrl"], (res) => {
+      if (res.backendBaseUrl) backendBaseUrl = res.backendBaseUrl;
+      _doConnect();
+    });
+  } else {
+    _doConnect();
+  }
+}
+
+function _doConnect() {
   try {
-    const wsUrl = `ws://127.0.0.1:8000/ws?symbol=${encodeURIComponent(currentSymbol)}${currentPrice ? `&price=${currentPrice}` : ""}`;
+    const wsUrl = getWsUrl(backendBaseUrl, currentSymbol, currentPrice);
     socket = new WebSocket(wsUrl);
 
     socket.onopen = () => {
-      console.log(`[Background] Connected to Market Intelligence WebSocket for ${currentSymbol}`);
+      console.log(`[Background] Connected to Market Intelligence WebSocket at ${wsUrl} for ${currentSymbol}`);
       subscribe(currentSymbol, currentTimeframe, currentPrice);
     };
 
@@ -88,6 +127,19 @@ if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.onMessage)
     } else if (message.type === "REQUEST_REFRESH") {
       subscribe(currentSymbol, currentTimeframe, currentPrice);
       sendResponse({ status: "ok" });
+    } else if (message.type === "SET_BACKEND_URL") {
+      if (message.url) {
+        backendBaseUrl = message.url;
+        if (typeof chrome !== "undefined" && chrome.storage && chrome.storage.local) {
+          chrome.storage.local.set({ backendBaseUrl: message.url });
+        }
+        if (socket) {
+          try { socket.close(); } catch (e) {}
+          socket = null;
+        }
+        connectWebSocket();
+      }
+      sendResponse({ status: "ok", backendBaseUrl });
     }
   });
 }

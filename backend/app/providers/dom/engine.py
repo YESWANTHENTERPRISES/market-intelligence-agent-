@@ -1,12 +1,10 @@
 import time
-import asyncio
 import logging
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
 from app.providers.dom.models import (
     DOMIntelligenceData,
     LiquidityZone,
-    PriceLevel,
     SourceDetail,
     SourceSnapshot,
     SourceStatus,

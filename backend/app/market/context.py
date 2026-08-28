@@ -6,7 +6,7 @@ from app.models.schemas import (
     SessionContextDetail, ContextQualityDetail, ImportantLevels,
     DOMIntelligence
 )
-from app.market.structure import market_structure_engine, calculate_atr
+from app.market.structure import market_structure_engine
 
 logger = logging.getLogger("market_context")
 

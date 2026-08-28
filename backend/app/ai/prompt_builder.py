@@ -1,5 +1,5 @@
 import re
-from typing import Dict, List, Any, Optional, Tuple
+from typing import Dict, List, Any, Tuple
 
 class AIPromptBuilderAndValidator:
     def build_prompt_with_levels(
