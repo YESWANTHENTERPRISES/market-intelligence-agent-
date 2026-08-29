@@ -6,12 +6,10 @@ MAX_BASIS_TIMESTAMP_DELTA_SEC = 60.0
 MAX_LIVE_FRESHNESS_SEC = 30.0
 MAX_DELAYED_FRESHNESS_SEC = 900.0  # 15 minutes
 
-# Default source weights specified by prompt
+# Default source weights for active DOM adapters
 DEFAULT_DOM_SOURCE_WEIGHTS = {
-    "COMEX": 0.40,
-    "OANDA": 0.25,
-    "DUKASCOPY": 0.20,
-    "FXCM": 0.15,
+    "MT5": 0.50,
+    "CTRADER": 0.50,
 }
 
 def classify_freshness(snapshot: SourceSnapshot, current_time: Optional[float] = None) -> Tuple[SourceStatus, str]:
@@ -20,6 +18,9 @@ def classify_freshness(snapshot: SourceSnapshot, current_time: Optional[float] =
 
     if snapshot.status in [SourceStatus.DOWN, SourceStatus.UNAVAILABLE]:
         return SourceStatus.UNAVAILABLE, "UNAVAILABLE"
+
+    if snapshot.status == SourceStatus.SIMULATED:
+        return SourceStatus.SIMULATED, "SIMULATED"
 
     age = current_time - snapshot.observed_timestamp
     if age < 0:

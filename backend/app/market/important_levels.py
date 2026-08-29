@@ -332,6 +332,9 @@ class ImportantLevelsEngine:
         }
         if using_synthetic_fallback:
             data_quality_report["data_source"] = "SYNTHETIC_FALLBACK"
+            data_quality_report["level"] = "SYNTHETIC_FALLBACK"
+        else:
+            data_quality_report["data_source"] = "LIVE_OHLC"
 
         return {
             "status": "AVAILABLE",

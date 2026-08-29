@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import json
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
@@ -10,7 +11,13 @@ from app.replay.api import router as replay_router
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("market_intelligence_backend")
 
-app = FastAPI(title=settings.APP_NAME)
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    yield
+    await provider_manager.client.aclose()
+    logger.info("httpx client closed cleanly.")
+
+app = FastAPI(title=settings.APP_NAME, lifespan=lifespan)
 app.include_router(replay_router)
 
 app.add_middleware(
@@ -26,11 +33,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    await provider_manager.client.aclose()
-    logger.info("httpx client closed cleanly.")
 
 @app.get("/")
 async def root():

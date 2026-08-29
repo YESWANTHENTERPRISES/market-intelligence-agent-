@@ -18,11 +18,10 @@ def test_7_multiple_timeframe_confluence():
 def test_8_dom_confluence():
     from app.providers.dom.models import DOMIntelligenceData, SourceDetail, LiquidityZone
     mock_dom = DOMIntelligenceData(
-        coverage="MULTI-SOURCE (3/4)",
+        coverage="MULTI-SOURCE (2/2)",
         sources=[
-            SourceDetail(name="COMEX", status="LIVE", freshness="LIVE", included_in_aggregation=True),
-            SourceDetail(name="OANDA", status="LIVE", freshness="LIVE", included_in_aggregation=True),
-            SourceDetail(name="DUKASCOPY", status="LIVE", freshness="LIVE", included_in_aggregation=True)
+            SourceDetail(name="MetaTrader 5", status="LIVE", freshness="LIVE", included_in_aggregation=True),
+            SourceDetail(name="cTrader Open API", status="LIVE", freshness="LIVE", included_in_aggregation=True)
         ],
         current_price=4431.00,
         liquidity=[LiquidityZone(price_range="4438–4440", side="ASK LIQUIDITY", impact="HIGH", score=80.0)],
@@ -31,24 +30,24 @@ def test_8_dom_confluence():
         futures_liquidity="HIGH",
         futures_sell_wall="HIGH",
         divergence="HIGH",
-        basis="+$1.80",
-        basis_value=1.80,
+        basis="UNAVAILABLE",
+        basis_value=None,
         data_quality="HIGH"
     )
 
     zone_dom = {
         "timeframes": ["1H"],
-        "evidence": ["1H swing high", "COMEX ask concentration", "OANDA positioning"]
+        "evidence": ["1H swing high", "MT5 ask concentration", "cTrader positioning"]
     }
 
     score, breakdown = important_levels_engine._calculate_confluence_score(
         zone=zone_dom, current_price=4431.00, atr=5.0, dom_data=mock_dom, interactions={}
     )
 
-    assert breakdown["dom_confluence"] == 15
+    assert breakdown["dom_confluence"] == 10
     assert breakdown["liquidity_evidence"] == 10
 
-def test_9_comex_basis_normalization():
+def test_9_basis_normalization():
     gc_futures_price = 4433.80
     spot_price = 4432.00
 
@@ -62,17 +61,13 @@ def test_9_comex_basis_normalization():
 
 def test_11_source_weight_redistribution():
     default_weights = {
-        "COMEX": 0.40,
-        "OANDA": 0.25,
-        "DUKASCOPY": 0.20,
-        "FXCM": 0.15
+        "MT5": 0.50,
+        "CTRADER": 0.50
     }
-    # FXCM is unavailable
-    active_sources = ["COMEX", "OANDA", "DUKASCOPY"]
+    # CTRADER is unavailable
+    active_sources = ["MT5"]
     redistributed = renormalize_weights(active_sources, default_weights)
 
-    assert "FXCM" not in redistributed
+    assert "CTRADER" not in redistributed
     assert sum(redistributed.values()) == pytest.approx(1.0, abs=0.001)
-    assert redistributed["COMEX"] > 0.40
-    assert redistributed["OANDA"] > 0.25
-    assert redistributed["DUKASCOPY"] > 0.20
+    assert redistributed["MT5"] == 1.0

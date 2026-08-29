@@ -10,3 +10,8 @@ sqlalchemy>=2.0.0
 aiosqlite>=0.19.0
 pytest>=7.3.0
 pytest-asyncio>=0.21.0
+# DOM Market Depth Connectors (MT5 and cTrader Open API)
+MetaTrader5>=5.0.0; platform_system == "Windows"
+protobuf>=4.21.0
+twisted>=22.0.0
+

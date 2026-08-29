@@ -7,15 +7,14 @@ from app.providers.dom.models import SourceSnapshot, SourceStatus
 from app.core.config import settings
 
 
-
 @pytest.mark.asyncio
 async def test_1_source_attribution():
     manager = ProviderManager()
     with patch.object(manager, "_resolve_canonical_price", new=AsyncMock(return_value=PriceMetadata(
-        price=4335.20, source="OANDA", timestamp=time.time(), is_market_feed=True, age_seconds=0.0, status="LIVE"
+        price=4335.20, source="MT5", timestamp=time.time(), is_market_feed=True, age_seconds=0.0, status="LIVE"
     ))):
         meta = await manager._resolve_canonical_price("XAUUSD")
-        assert meta.source == "OANDA"
+        assert meta.source == "MT5"
         assert meta.price == pytest.approx(4335.20)
         assert meta.is_market_feed is True
         assert meta.is_client_supplied is False
@@ -26,44 +25,44 @@ async def test_2_tradingview_cannot_silently_override_trusted_spot():
     manager = ProviderManager()
     # Client pushes TradingView price 4391.10
     manager.update_symbol_price("XAUUSD", 4391.10, source="TRADINGVIEW")
-    
-    # Mock OANDA spot feed returning 4335.20
+
+    # Mock MT5 spot feed returning 4335.20
     with patch("app.providers.manager.dom_engine.adapters") as mock_adapters:
-        mock_oanda = AsyncMock()
-        mock_oanda.source_id = "OANDA"
-        mock_oanda.fetch_snapshot = AsyncMock(return_value=SourceSnapshot(
-            source_id="OANDA", source_name="OANDA", status=SourceStatus.LIVE,
+        mock_mt5 = AsyncMock()
+        mock_mt5.source_id = "MT5"
+        mock_mt5.fetch_snapshot = AsyncMock(return_value=SourceSnapshot(
+            source_id="MT5", source_name="MetaTrader 5", status=SourceStatus.LIVE,
             observed_timestamp=time.time(), raw_spot_price=4335.20
         ))
-        mock_adapters.__iter__.return_value = [mock_oanda]
-        
+        mock_adapters.__iter__.return_value = [mock_mt5]
+
         meta = await manager._resolve_canonical_price("XAUUSD")
-        # Trusted OANDA spot (4335.20) must be selected over TradingView client override (4391.10)
+        # Trusted MT5 spot (4335.20) must be selected over TradingView client override (4391.10)
         assert meta.price == pytest.approx(4335.20)
-        assert meta.source == "OANDA"
+        assert meta.source == "MT5"
 
 
 @pytest.mark.asyncio
 async def test_3_matching_spot_sources_consensus():
     manager = ProviderManager()
     with patch("app.providers.manager.dom_engine.adapters") as mock_adapters:
-        mock_oanda = AsyncMock()
-        mock_oanda.source_id = "OANDA"
-        mock_oanda.fetch_snapshot = AsyncMock(return_value=SourceSnapshot(
-            source_id="OANDA", source_name="OANDA", status=SourceStatus.LIVE,
+        mock_mt5 = AsyncMock()
+        mock_mt5.source_id = "MT5"
+        mock_mt5.fetch_snapshot = AsyncMock(return_value=SourceSnapshot(
+            source_id="MT5", source_name="MetaTrader 5", status=SourceStatus.LIVE,
             observed_timestamp=time.time(), raw_spot_price=4335.20
         ))
-        mock_duka = AsyncMock()
-        mock_duka.source_id = "DUKASCOPY"
-        mock_duka.fetch_snapshot = AsyncMock(return_value=SourceSnapshot(
-            source_id="DUKASCOPY", source_name="DUKASCOPY", status=SourceStatus.LIVE,
+        mock_ctrader = AsyncMock()
+        mock_ctrader.source_id = "CTRADER"
+        mock_ctrader.fetch_snapshot = AsyncMock(return_value=SourceSnapshot(
+            source_id="CTRADER", source_name="cTrader Open API", status=SourceStatus.LIVE,
             observed_timestamp=time.time(), raw_spot_price=4335.18
         ))
-        mock_adapters.__iter__.return_value = [mock_oanda, mock_duka]
+        mock_adapters.__iter__.return_value = [mock_mt5, mock_ctrader]
 
         meta = await manager._resolve_canonical_price("XAUUSD")
         assert meta.price == pytest.approx((4335.20 + 4335.18) / 2.0)
-        assert meta.source == "OANDA"
+        assert meta.source == "MT5"
         assert meta.status == "LIVE"
 
 
@@ -74,13 +73,13 @@ async def test_4_source_outlier_rejection():
     manager.update_symbol_price("XAUUSD", 4391.10, source="TRADINGVIEW")
 
     with patch("app.providers.manager.dom_engine.adapters") as mock_adapters:
-        mock_oanda = AsyncMock()
-        mock_oanda.source_id = "OANDA"
-        mock_oanda.fetch_snapshot = AsyncMock(return_value=SourceSnapshot(
-            source_id="OANDA", source_name="OANDA", status=SourceStatus.LIVE,
+        mock_mt5 = AsyncMock()
+        mock_mt5.source_id = "MT5"
+        mock_mt5.fetch_snapshot = AsyncMock(return_value=SourceSnapshot(
+            source_id="MT5", source_name="MetaTrader 5", status=SourceStatus.LIVE,
             observed_timestamp=time.time(), raw_spot_price=4335.20
         ))
-        mock_adapters.__iter__.return_value = [mock_oanda]
+        mock_adapters.__iter__.return_value = [mock_mt5]
 
         meta = await manager._resolve_canonical_price("XAUUSD")
         # TradingView 4391.10 must be marked OUTLIER and rejected
@@ -94,12 +93,12 @@ async def test_5_client_price_cache_metadata_survival():
     manager = ProviderManager()
     now = time.time()
     manager._price_cache["XAUUSD"] = PriceMetadata(
-        price=4335.20, source="OANDA", timestamp=now, is_market_feed=True, age_seconds=0.0, status="LIVE"
+        price=4335.20, source="MT5", timestamp=now, is_market_feed=True, age_seconds=0.0, status="LIVE"
     )
 
     meta = await manager._resolve_canonical_price("XAUUSD")
     assert "CACHE" in meta.source
-    assert "OANDA" in meta.source
+    assert "MT5" in meta.source
     assert meta.price == pytest.approx(4335.20)
     assert meta.status == "CACHED"
 
@@ -145,7 +144,7 @@ async def test_8_no_trusted_spot_fallback_to_benchmark():
 async def test_9_dom_price_consistency():
     manager = ProviderManager()
     with patch.object(manager, "_resolve_canonical_price", new=AsyncMock(return_value=PriceMetadata(
-        price=4335.20, source="OANDA", timestamp=time.time(), is_market_feed=True, age_seconds=0.0, status="LIVE"
+        price=4335.20, source="MT5", timestamp=time.time(), is_market_feed=True, age_seconds=0.0, status="LIVE"
     ))):
         res = await manager.get_market_intelligence("XAUUSD", "5M")
         assert res.current_price == pytest.approx(4335.20)
@@ -164,13 +163,13 @@ async def test_10_exact_regression_discrepancy():
     manager.update_symbol_price("XAUUSD", 4391.10, source="TRADINGVIEW")
 
     with patch("app.providers.manager.dom_engine.adapters") as mock_adapters:
-        mock_oanda = AsyncMock()
-        mock_oanda.source_id = "OANDA"
-        mock_oanda.fetch_snapshot = AsyncMock(return_value=SourceSnapshot(
-            source_id="OANDA", source_name="OANDA", status=SourceStatus.LIVE,
+        mock_mt5 = AsyncMock()
+        mock_mt5.source_id = "MT5"
+        mock_mt5.fetch_snapshot = AsyncMock(return_value=SourceSnapshot(
+            source_id="MT5", source_name="MetaTrader 5", status=SourceStatus.LIVE,
             observed_timestamp=time.time(), raw_spot_price=4335.20
         ))
-        mock_adapters.__iter__.return_value = [mock_oanda]
+        mock_adapters.__iter__.return_value = [mock_mt5]
 
         res = await manager.get_market_intelligence("XAUUSD", "5M")
         assert res.current_price == pytest.approx(4335.20)

@@ -107,7 +107,7 @@ function LevelCard({ level, type, isExpanded, onToggle, currentPrice }) {
 
   const evidence = isObj ? (level.evidence || []) : ["Multi-timeframe market structure", "DOM orderbook concentration"];
   const timeframes = isObj ? (level.timeframes || []).join(", ") : "1H, 30M";
-  const domSources = isObj ? (level.dom?.sources || []).join(" + ") : "COMEX + OANDA";
+  const domSources = isObj ? (level.dom?.sources || []).join(" + ") : "MT5 + cTrader";
   const dist = isObj ? level.distance : 0.0;
   const distAtr = isObj ? level.distance_atr : 0.0;
   const status = isObj ? level.status : "ACTIVE";
@@ -173,7 +173,7 @@ function LevelCard({ level, type, isExpanded, onToggle, currentPrice }) {
             </div>
             <div className="attr-row">
               <span className="attr-label">DOM Sources:</span>
-              <span className="attr-val">{domSources || "COMEX + OANDA"}</span>
+              <span className="attr-val">{domSources || "MT5 + cTrader"}</span>
             </div>
             <div className="attr-row">
               <span className="attr-label">Distance to Price:</span>

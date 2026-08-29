@@ -498,13 +498,13 @@ export default function IntelligencePanel() {
         {/* Coverage */}
         <div className="data-row">
           <span className="data-label">Coverage</span>
-          <span className="data-value">{d.dom?.coverage || "MULTI-SOURCE (3/4)"}</span>
+          <span className="data-value">{d.dom?.coverage || "NO-SOURCE (0/2)"}</span>
         </div>
 
         {/* Source Breakdown */}
         {d.dom?.sources && d.dom.sources.length > 0 ? (
           d.dom.sources.map((src, idx) => (
-            <div className="data-row" key={idx} title={src.name === "COMEX" ? "Centralized CME/COMEX Futures Liquidity" : "OTC Broker Liquidity & Positioning"}>
+            <div className="data-row" key={idx} title={src.name.includes("MetaTrader") ? "MetaTrader 5 Depth of Market" : "Spotware cTrader Open API Depth"}>
               <span className="data-label">{src.name}</span>
               <span className={`data-value ${src.status.includes('LIVE') ? 'text-bullish' : (src.status.includes('DELAYED') ? 'text-gold' : 'text-neutral')}`}>
                 {src.status}
@@ -513,17 +513,13 @@ export default function IntelligencePanel() {
           ))
         ) : (
           <>
-            <div className="data-row" title="Centralized CME/COMEX Futures Liquidity">
-              <span className="data-label">COMEX</span>
-              <span className="data-value text-gold">DELAYED 15M</span>
+            <div className="data-row" title="MetaTrader 5 Terminal Depth">
+              <span className="data-label">MT5</span>
+              <span className="data-value text-neutral">UNAVAILABLE</span>
             </div>
-            <div className="data-row" title="OTC Broker Liquidity & Positioning">
-              <span className="data-label">OANDA</span>
-              <span className="data-value text-bullish">LIVE</span>
-            </div>
-            <div className="data-row" title="OTC Broker Liquidity & Positioning">
-              <span className="data-label">DUKASCOPY</span>
-              <span className="data-value text-bullish">LIVE</span>
+            <div className="data-row" title="Spotware cTrader Open API Depth">
+              <span className="data-label">cTrader</span>
+              <span className="data-value text-neutral">UNAVAILABLE</span>
             </div>
           </>
         )}

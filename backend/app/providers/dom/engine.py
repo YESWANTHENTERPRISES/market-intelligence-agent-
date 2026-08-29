@@ -9,11 +9,9 @@ from app.providers.dom.models import (
     SourceSnapshot,
     SourceStatus,
 )
-from app.providers.dom.adapters import COMEXAdapter, OANDAAdapter, DukascopyAdapter
+from app.providers.dom.adapters import MT5DOMAdapter, CTraderDOMAdapter, BaseDOMAdapter
 from app.providers.dom.normalizer import (
-    calculate_basis,
     classify_freshness,
-    normalize_futures_price,
     renormalize_weights,
     score_relative_depth,
 )
@@ -21,18 +19,19 @@ from app.providers.dom.normalizer import (
 logger = logging.getLogger("dom_engine")
 
 DEFAULT_SOURCE_WEIGHTS = {
-    "COMEX": 0.35,
-    "OANDA": 0.35,
-    "DUKASCOPY": 0.30,
+    "MT5": 0.50,
+    "CTRADER": 0.50,
 }
 
+
 class DOMEngine:
-    def __init__(self):
-        self.adapters = [
-            COMEXAdapter(),
-            OANDAAdapter(),
-            DukascopyAdapter(),
-        ]
+    def __init__(self, adapters: Optional[List[BaseDOMAdapter]] = None):
+        self.adapters: List[BaseDOMAdapter] = (
+            adapters if adapters is not None else [
+                MT5DOMAdapter(),
+                CTraderDOMAdapter(),
+            ]
+        )
 
     def _score_with_proximity(
         self,
@@ -71,8 +70,8 @@ class DOMEngine:
 
     async def build_dom_intelligence(self, symbol: str = "XAUUSD", current_price: float = 4431.00) -> DOMIntelligenceData:
         now = time.time()
-        
-        # 1. Fetch snapshots from all adapters using live/passed current_price
+
+        # 1. Fetch snapshots from all adapters
         snapshots: List[SourceSnapshot] = []
         for adapter in self.adapters:
             try:
@@ -91,14 +90,15 @@ class DOMEngine:
                         observed_timestamp=now,
                         freshness_seconds=0.0,
                         freshness_label="UNAVAILABLE",
-                        included_in_aggregation=False
+                        included_in_aggregation=False,
+                        bids=[],
+                        asks=[]
                     )
                 )
 
         # 2. Classify freshness & build source details
         active_snapshots: List[SourceSnapshot] = []
         source_details: List[SourceDetail] = []
-        comex_snap: Optional[SourceSnapshot] = None
         spot_snap: Optional[SourceSnapshot] = None
 
         for snap in snapshots:
@@ -118,11 +118,8 @@ class DOMEngine:
 
             if is_active:
                 active_snapshots.append(snap)
-
-            if snap.source_id == "COMEX":
-                comex_snap = snap
-            elif snap.source_id in ["OANDA", "DUKASCOPY"] and spot_snap is None and is_active:
-                spot_snap = snap
+                if spot_snap is None and snap.raw_spot_price:
+                    spot_snap = snap
 
         total_sources = len(self.adapters)
         active_count = len(active_snapshots)
@@ -136,13 +133,7 @@ class DOMEngine:
             )
         )
 
-        # 3. Calculate Spot/Futures Basis & Coordinate Normalization
-        basis_value: Optional[float] = None
-        basis_str: str = "UNAVAILABLE"
-
-        futures_mid = comex_snap.raw_futures_price if comex_snap else None
-        futures_ts = comex_snap.observed_timestamp if comex_snap else now
-
+        # 3. Determine spot price
         spot_mid = float(current_price) if (current_price is not None and current_price > 0) else None
         if spot_mid is None and spot_snap is not None and spot_snap.raw_spot_price is not None:
             try:
@@ -158,14 +149,7 @@ class DOMEngine:
                 f"[DOM] No valid spot price for {symbol}, using benchmark {spot_mid}"
             )
 
-        spot_ts = spot_snap.observed_timestamp if spot_snap else now
-
-        if futures_mid and spot_mid:
-            basis_val, b_str = calculate_basis(futures_mid, spot_mid, futures_ts, spot_ts)
-            basis_value = basis_val
-            basis_str = b_str
-
-        # 4. Normalize prices & depth scores across sources
+        # 4. Normalize weights across active sources
         active_ids = [s.source_id for s in active_snapshots]
         weights = renormalize_weights(active_ids, DEFAULT_SOURCE_WEIGHTS)
 
@@ -193,11 +177,11 @@ class DOMEngine:
 
         for snap in active_snapshots:
             w = weights.get(snap.source_id, 0.0)
-            
-            # Asks (Supply above or around spot mid)
+
+            # Asks (Supply above spot mid)
             scored_asks = score_relative_depth(snap.asks)
             for lvl in scored_asks:
-                norm_price = normalize_futures_price(lvl.price, basis_value if snap.source_id == "COMEX" else None)
+                norm_price = lvl.price
                 if norm_price is None:
                     continue
                 # Validate ask semantics: ask price should be >= spot_mid - 2.5 * step
@@ -208,10 +192,10 @@ class DOMEngine:
                 bucket_key = f"{fmt.format(low_b)}–{fmt.format(low_b + step)}"
                 ask_buckets[bucket_key] = ask_buckets.get(bucket_key, 0.0) + (lvl.relative_score or 0.0) * w
 
-            # Bids (Demand below or around spot mid)
+            # Bids (Demand below spot mid)
             scored_bids = score_relative_depth(snap.bids)
             for lvl in scored_bids:
-                norm_price = normalize_futures_price(lvl.price, basis_value if snap.source_id == "COMEX" else None)
+                norm_price = lvl.price
                 if norm_price is None:
                     continue
                 # Validate bid semantics: bid price should be <= spot_mid + 2.5 * step
@@ -279,8 +263,7 @@ class DOMEngine:
 
         liquidity_status = "VERIFIED" if active_count > 0 else "DATA NOT VERIFIED"
 
-
-        # 6. Aggregated Retail Positioning
+        # 6. Aggregated Retail / Broker Positioning (if available)
         retail_longs = [s.retail_long_pct for s in active_snapshots if s.retail_long_pct is not None]
         if retail_longs:
             avg_long = sum(retail_longs) / len(retail_longs)
@@ -288,40 +271,18 @@ class DOMEngine:
         else:
             retail_pos = "UNAVAILABLE"
 
-        # 7. Futures Sell Wall (COMEX Ask Depth)
-        futures_sell_wall = "HIGH"
-        futures_liquidity = "HIGH"
-        if comex_snap and comex_snap.asks:
-            max_comex_ask = max((lvl.volume for lvl in comex_snap.asks), default=0.0)
-            futures_sell_wall = "HIGH" if max_comex_ask > 800 else ("MODERATE" if max_comex_ask > 300 else "LOW")
-            futures_liquidity = futures_sell_wall
-        elif comex_snap and comex_snap.status == SourceStatus.UNAVAILABLE:
-            futures_sell_wall = "UNAVAILABLE"
-            futures_liquidity = "UNAVAILABLE"
+        # 7. Futures Sell Wall (Set to UNAVAILABLE in pure OTC / Broker DOM mode)
+        futures_sell_wall = "UNAVAILABLE"
+        futures_liquidity = "UNAVAILABLE"
 
-        # 8. Divergence Calculation (OTC Retail Long vs Futures Sell Wall)
-        divergence = (
-            "UNAVAILABLE"
-            if retail_pos == "UNAVAILABLE" or active_count == 0
-            else (
-                "HIGH"
-                if retail_pos == "LONG" and futures_sell_wall == "HIGH"
-                else (
-                    "MODERATE"
-                    if retail_pos != "NEUTRAL" and futures_sell_wall != "LOW"
-                    else "LOW"
-                )
-            )
-        )
+        # 8. Divergence Calculation
+        divergence = "UNAVAILABLE"
 
         # 9. Data Quality Scoring
-        data_quality = "MODERATE"
-        if active_count >= 3 and basis_value is not None:
+        if active_count >= 2:
             data_quality = "HIGH"
-        elif active_count >= 2:
-            data_quality = "MODERATE"
         elif active_count == 1:
-            data_quality = "LOW"
+            data_quality = "MODERATE"
         else:
             data_quality = "UNAVAILABLE"
 
@@ -335,11 +296,11 @@ class DOMEngine:
             futures_liquidity=futures_liquidity,
             futures_sell_wall=futures_sell_wall,
             divergence=divergence,
-            basis=basis_str,
-            basis_value=basis_value,
+            basis="UNAVAILABLE",
+            basis_value=None,
             data_quality=data_quality,
             update_timestamp=datetime.now(timezone.utc).isoformat()
         )
 
-dom_engine = DOMEngine()
 
+dom_engine = DOMEngine()

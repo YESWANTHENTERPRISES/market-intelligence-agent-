@@ -8,6 +8,7 @@ class SourceStatus(str, Enum):
     STALE = "STALE"
     DOWN = "DOWN"
     UNAVAILABLE = "UNAVAILABLE"
+    SIMULATED = "SIMULATED"
 
 class PriceLevel(BaseModel):
     price: float

@@ -6,57 +6,59 @@ A compact, dark, TradingView-style market intelligence Chrome Extension powered 
 
 ## DOM Intelligence Module & Provider Architecture
 
-The DOM (Depth of Market) Intelligence Module aggregates liquidity, positioning, and price coordinate data across multiple institutional and OTC data feeds.
+The DOM (Depth of Market) Intelligence Module aggregates real-time broker order book liquidity and depth coordinates across institutional MetaTrader 5 (MT5) and Spotware cTrader Open API feeds.
 
-### Provider Data Sources
+### Supported DOM Data Sources
 
-1. **COMEX Gold Futures (GC)**:
-   - **Type**: Centralized Futures Exchange Order Book.
-   - **Units**: Contracts (e.g. 100 troy oz per contract).
-   - **Freshness**: 15-Minute Delayed (or Live with direct exchange credentials).
-   - **Price Coordinate**: Futures Price (e.g. `$4,432.80`). Requires **Basis Normalization** (`spot_price = futures_price - basis`) to map into XAUUSD spot coordinates.
+1. **MetaTrader 5 (MT5)**:
+   - **Type**: Real-time Terminal Depth of Market & Level 2 Order Book (`market_book_get`).
+   - **Units**: Standard Lots.
+   - **Freshness**: Real-time tick & DOM updates via local IPC.
+   - **Configuration**: `MT5_ENABLED=true`, `MT5_PATH`, `MT5_LOGIN`, `MT5_PASSWORD`, `MT5_SERVER`.
 
-2. **Broker-Specific OTC Data (e.g. OANDA / Dukascopy)**:
-   - **Type**: Decentralized Over-The-Counter (OTC) Broker Order Books & Client Sentiment.
-   - **Units**: Standard Lots / Units.
-   - **Freshness**: Real-time Live (0.5s–1.5s).
-   - **Retail Positioning**: Aggregated retail client long vs short sentiment ratio (e.g. `64.5% LONG`).
+2. **Spotware cTrader Open API**:
+   - **Type**: Institutional & Retail Broker Market Depth (`ProtoOADepthEvent`).
+   - **Units**: Standard Lots.
+   - **Freshness**: Real-time Protobuf streaming.
+   - **Configuration**: `CTRADER_ENABLED=true`, `CTRADER_CLIENT_ID`, `CTRADER_CLIENT_SECRET`, `CTRADER_ACCESS_TOKEN`, `CTRADER_ACCOUNT_ID`.
 
 ---
 
 ## Non-Negotiable Data Rules & Provider Limitations
 
-### 1. OTC Broker Depth vs. Centralized Futures Depth
-- OTC broker depth represents retail and broker-client liquidity within a specific execution pool.
-- COMEX futures depth represents centralized exchange limit orders.
-- **Unit Normalization Rule**: Raw COMEX contract quantities and OTC broker units are **never directly compared**. Each provider's depth is converted into relative percentile scores (`0–100`) before applying renormalized source weights.
-
-### 2. Spot / Futures Basis Normalization
-- Futures and spot prices diverge due to carry cost, interest rates, and contract expiry (`basis = futures_mid - spot_mid`).
-- The DOM module dynamically computes `basis` and subtracts it from COMEX futures limit prices before price bucketing into discrete 2-dollar spot zones.
-- **Stale Basis Rejection**: If the timestamp delta between futures and spot snapshots exceeds 60 seconds, `basis` is marked `UNAVAILABLE` and un-normalized futures levels are rejected from spot aggregation.
-
-### 3. Non-Institutional Order Labeling
-- Large limit ask orders on COMEX are labeled strictly as `FUTURES SELL WALL` or `COMEX ASK LIQUIDITY`.
-- **Institutional Identity Disclaimer**: The system **never asserts** that a large order is definitely "institutional", "smart money", or an "algorithm". Order intent cannot be proven from depth alone.
-
-### 4. Production Fail-Safe State Handling
-- No mock data or fake numbers are fabricated in production.
-- If a provider is inaccessible or unconfigured, its state returns `UNAVAILABLE`.
+### 1. Dynamic Source Coverage & Fail-Safe Handling
+- The coverage indicator dynamically scales to reflect the active registered adapters: `NO-SOURCE (0/N)`, `SINGLE-SOURCE (1/N)`, or `MULTI-SOURCE (N/N)`.
+- If a provider is inaccessible, unconfigured, or offline, its status returns `UNAVAILABLE` and it is excluded from aggregation.
 - Source weights are dynamically renormalized across active/eligible providers only.
+
+### 2. Relative Depth Scoring
+- Each active provider's raw orderbook volume is converted into relative percentile scores (`0–100`) before applying renormalized source weights.
+- Multi-source agreement elevates liquidity zone confluence without conflating different broker execution sizes.
 
 ---
 
 ## Setup & Execution
 
 ### 1. Environment Configuration
-Add your API keys to `backend/.env`:
+Add your API keys and optional DOM broker settings to `backend/.env`:
 ```env
 FINNHUB_API_KEY=your_key_here
 FRED_API_KEY=your_key_here
 GEMINI_API_KEY=your_key_here
-HOST=0.0.0.0
-PORT=8000
+
+# MetaTrader 5 DOM Configuration (Optional)
+MT5_ENABLED=false
+MT5_PATH=C:\Program Files\MetaTrader 5\terminal64.exe
+MT5_LOGIN=12345678
+MT5_PASSWORD=your_mt5_password
+MT5_SERVER=YourBroker-Server
+
+# Spotware cTrader Open API Configuration (Optional)
+CTRADER_ENABLED=false
+CTRADER_CLIENT_ID=your_client_id
+CTRADER_CLIENT_SECRET=your_client_secret
+CTRADER_ACCESS_TOKEN=your_access_token
+CTRADER_ACCOUNT_ID=1234567
 ```
 
 ### 2. Run Tests
